@@ -46,60 +46,61 @@ BEGIN {
 my @months = ( "None", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec");
 
 
-## @fn @ make_destination($file, $basename, $archivedir, $today)
+## @fn @ make_destination($file, $today, $settings)
 # Generate the archive directory name and filename for the specified
 # source file.
 #
-# @param file       The full name, including path, of the source file.
-# @param basename   The common initial part of the file name before the datestamp.
-# @param archivedir The base directory into which archives should go.
-# @param today      A reference to a DateTime object for today's date.
+# @param file     The full name, including path, of the source file.
+# @param today    A reference to a DateTime object for today's date.
+# @param settings A reference to a hash of settings for the archive operation.
 # @return The archive directory to write the file into, and the filename to
 #         use. Note that this will only return data for previous days, and
 #         it will return undef for files with datestamps that match the date
 #         in $today.
 sub make_destination {
     my $file       = shift;
-    my $basename   = shift;
-    my $archivedir = shift;
     my $today      = shift;
+    my $settings   = shift;
 
-    my ($filename) = $file =~ m|/($basename.+)$|;
+    my ($filename) = $file =~ m|/($settings->{basename}.+)$|;
     die "Unable to locate valid filename in $file.\n"
         unless($filename);
 
-    my ($year, $month, $day) = $filename =~ /^$basename(\d{4})-(\d\d)-(\d\d)/;
+    my ($year, $month, $day) = $filename =~ /^$settings->{basename}(\d{4})-(\d\d)-(\d\d)/;
 
-    my $filedate = DateTime -> new(year => $year, month => $month, day => $day);
+    my $filedate = DateTime -> new(year => $year, month => $month, day => $day) -> truncate( to => 'day' );
     return undef
-        if($filedate == $today);
+        if(!$settings -> {"realtime"} && $filedate == $today);
 
-    return (path_join($archivedir, $year, $month." ".$months[$month], "$year$month$day"), $filename);
+    my @parts = ( $settings -> {"archive_dir"} );
+    push(@parts, $year, $month." ".$months[$month], "$year$month$day")
+	unless($settings -> {"flat"});
+
+    return (path_join(@parts), $filename);
 }
 
 
-## @fn void archive($sourcedir, $basename, $extension, $archivedir)
+## @fn void archive($sourcedir, $settings)
 # Move files that match the specified basename and extension out of the
 # source directory into the appropriate subdirectory of the archive.
 #
-# @param sourcedir  The directory containing the files to archive.
-# @param basename   The common initial part of the file name before the datestamp.
-# @param extension  The file extension to filter files on.
-# @param archivedir The base directory into which archives should go.
+# @param sourcedir The directory containing the files to archive.
+# @param settings  A reference to a hash of settings for the archive operation.
 sub archive {
     my $sourcedir  = shift;
-    my $basename   = shift;
-    my $extension  = shift;
-    my $archivedir = shift;
+    my $settings   = shift;
 
     my $today = DateTime -> today();
 
-    my @files = glob(path_join($sourcedir, $basename."*".$extension));
+    my @files = glob(path_join($sourcedir, $settings -> {"basename"}."*".$settings -> {"extension"}));
 
     my @tomove = ();
     foreach my $file (@files) {
-        my ($destdir, $filename) = make_destination($file, $basename, $archivedir, $today);
-        next if(!$destdir); # Allow skipping of files
+        my ($destdir, $filename) = make_destination($file, $today, $settings);
+        if(!$destdir) {
+	    print "Skipping $file...\n"; # Allow skipping of files
+	    next;
+	}
 
         print "Moving $filename to $destdir...\n";
         make_path($destdir)
@@ -118,8 +119,5 @@ my $settings = Webperl::ConfigMicro -> new(path_join($path, "config", "archive.c
 foreach my $section (keys(%{$settings})) {
     next unless($section =~ /^type.\d+$/);
 
-    archive($settings -> {"archive"} -> {"today_dir"},
-            $settings -> {$section} -> {"basename"},
-            $settings -> {$section} -> {"extension"},
-            $settings -> {$section} -> {"archive_dir"})
+    archive($settings -> {"archive"} -> {"today_dir"}, $settings -> {$section});
 }
